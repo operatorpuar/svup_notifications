@@ -1,0 +1,36 @@
+---
+// Server-side logout handling
+const token = Astro.cookies.get('jwt_token')?.value;
+
+console.log('=== Logout page accessed ===');
+console.log('Token exists:', !!token);
+
+// Call external Backend API logout-all endpoint if token exists
+if (token) {
+  try {
+    const backendUrl = import.meta.env.BACKEND_API_URL || 'https://firebackend-6c859a037589.herokuapp.com/api';
+    console.log('Calling backend logout:', `${backendUrl}/auth/logout-all/`);
+    
+    const response = await fetch(`${backendUrl}/auth/logout-all/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    console.log('Backend logout response:', response.status);
+  } catch (error) {
+    console.error('Backend logout error:', error);
+    // Continue with local logout even if external API fails
+  }
+}
+
+// Clear cookies
+Astro.cookies.delete('jwt_token', { path: '/' });
+Astro.cookies.delete('username', { path: '/' });
+
+console.log('Cookies deleted, redirecting to login');
+
+// Redirect to login page
+return Astro.redirect('/');
+---

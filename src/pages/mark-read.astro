@@ -1,0 +1,82 @@
+---
+// Mark notification(s) as read
+import { requireAuth } from '../lib/auth-middleware';
+import { db, Notification, eq, and } from 'astro:db';
+
+const username = requireAuth(Astro.cookies);
+if (!username) {
+  return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+    status: 401,
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
+
+let result = { success: false, message: '', error: '' };
+
+if (Astro.request.method === 'POST') {
+  try {
+    const body = await Astro.request.json();
+    const { id, all } = body;
+    
+    console.log('=== Mark as read ===');
+    console.log('User:', username);
+    console.log('ID:', id);
+    console.log('All:', all);
+    
+    if (all) {
+      // Mark all notifications as read
+      await db
+        .update(Notification)
+        .set({ status: 'Read' })
+        .where(
+          and(
+            eq(Notification.username, username),
+            eq(Notification.status, 'New')
+          )
+        );
+      
+      console.log('✅ All notifications marked as read');
+      result = { success: true, message: 'All notifications marked as read', error: '' };
+      
+    } else if (id) {
+      // Mark specific notification as read
+      const notification = await db
+        .select()
+        .from(Notification)
+        .where(eq(Notification.id, id))
+        .get();
+      
+      if (!notification) {
+        result = { success: false, message: '', error: 'Notification not found' };
+      } else if (notification.username !== username) {
+        result = { success: false, message: '', error: 'Unauthorized to modify this notification' };
+      } else {
+        await db
+          .update(Notification)
+          .set({ status: 'Read' })
+          .where(eq(Notification.id, id));
+        
+        console.log('✅ Notification marked as read, ID:', id);
+        result = { success: true, message: 'Notification marked as read', error: '' };
+      }
+      
+    } else {
+      result = { success: false, message: '', error: 'id or all parameter required' };
+    }
+    
+  } catch (error: any) {
+    console.error('❌ Mark as read error:', error);
+    result = { success: false, message: '', error: 'Failed to mark notification as read' };
+  }
+}
+
+// Return JSON response
+const status = result.success ? 200 : (result.error === 'Unauthorized' ? 401 : 
+                result.error === 'Notification not found' ? 404 :
+                result.error === 'Unauthorized to modify this notification' ? 403 : 400);
+
+return new Response(JSON.stringify(result), {
+  status,
+  headers: { 'Content-Type': 'application/json' }
+});
+---

@@ -1,0 +1,544 @@
+---
+// Server-side authentication check and data fetching
+import { requireAuth } from '../lib/auth-middleware';
+import { db, Notification, eq, desc } from 'astro:db';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Header from '../components/Header.astro';
+import ErrorMessage from '../components/ErrorMessage.astro';
+import NotificationCard from '../components/NotificationCard.astro';
+import NotificationsList from '../components/NotificationsList.astro';
+
+// Check authentication
+const username = requireAuth(Astro.cookies);
+if (!username) {
+  return Astro.redirect('/');
+}
+
+// Fetch notifications from database
+const notifications = await db
+  .select()
+  .from(Notification)
+  .where(eq(Notification.username, username))
+  .orderBy(desc(Notification.created_at));
+
+// Count unread notifications
+const unreadCount = notifications.filter(n => n.status === 'New').length;
+---
+
+<BaseLayout title="Сповіщення - СВУП">
+  <Header />
+
+  <!-- Main Content -->
+  <main class="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
+    <ErrorMessage id="fcmError" type="warning" showRetry={false} />
+    <ErrorMessage id="networkError" type="error" showRetry={true} />
+
+    <NotificationsList unreadCount={unreadCount}>
+      {notifications.length === 0 ? (
+        <div class="bg-[#3A4556] rounded-2xl p-4 sm:p-6 text-center">
+          <p class="text-slate-400 text-sm sm:text-base">Немає сповіщень</p>
+        </div>
+      ) : (
+        notifications.map((notification) => (
+          <NotificationCard
+            id={notification.id}
+            title={notification.notification_title}
+            createdAt={notification.created_at}
+            status={notification.status}
+          />
+        ))
+      )}
+    </NotificationsList>
+  </main>
+
+    <script>
+      import { initializeApp } from 'firebase/app';
+      import { getMessaging, getToken, onMessage } from 'firebase/messaging';
+
+      // Firebase configuration
+      const firebaseConfig = {
+        apiKey: import.meta.env.PUBLIC_FIREBASE_API_KEY,
+        authDomain: import.meta.env.PUBLIC_FIREBASE_AUTH_DOMAIN,
+        projectId: import.meta.env.PUBLIC_FIREBASE_PROJECT_ID,
+        storageBucket: import.meta.env.PUBLIC_FIREBASE_STORAGE_BUCKET,
+        messagingSenderId: import.meta.env.PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+        appId: import.meta.env.PUBLIC_FIREBASE_APP_ID
+      };
+
+      const VAPID_KEY = import.meta.env.PUBLIC_FIREBASE_VAPID_KEY;
+
+      // Register service worker for background notifications
+      async function registerServiceWorker() {
+        if ('serviceWorker' in navigator) {
+          try {
+            const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+            console.log('Service Worker registered:', registration);
+            return registration;
+          } catch (error) {
+            console.error('Service Worker registration failed:', error);
+            return null;
+          }
+        }
+        return null;
+      }
+
+      // Show FCM error message
+      function showFCMError(message: string) {
+        const fcmError = document.getElementById('fcmError');
+        const fcmErrorText = document.getElementById('fcmErrorText');
+        if (fcmError && fcmErrorText) {
+          fcmErrorText.textContent = message;
+          fcmError.classList.remove('hidden');
+        }
+      }
+
+      // Hide FCM error message
+      function hideFCMError() {
+        const fcmError = document.getElementById('fcmError');
+        if (fcmError) {
+          fcmError.classList.add('hidden');
+        }
+      }
+
+      // Show network error message
+      function showNetworkError(message: string) {
+        const networkError = document.getElementById('networkError');
+        const networkErrorText = document.getElementById('networkErrorText');
+        if (networkError && networkErrorText) {
+          networkErrorText.textContent = message;
+          networkError.classList.remove('hidden');
+        }
+      }
+
+      // Hide network error message
+      function hideNetworkError() {
+        const networkError = document.getElementById('networkError');
+        if (networkError) {
+          networkError.classList.add('hidden');
+        }
+      }
+
+      // Initialize Firebase and FCM
+      async function initializeFCM() {
+        try {
+          // Register service worker first
+          await registerServiceWorker();
+
+          // Initialize Firebase app
+          const app = initializeApp(firebaseConfig);
+          const messaging = getMessaging(app);
+
+          // Request notification permission
+          const permission = await Notification.requestPermission();
+          
+          if (permission === 'granted') {
+            console.log('Notification permission granted');
+            hideFCMError();
+            
+            // Get FCM registration token
+            const token = await getToken(messaging, { vapidKey: VAPID_KEY });
+            
+            if (token) {
+              console.log('FCM Token retrieved:', token);
+              
+              // Register token with backend
+              await registerFCMToken(token);
+              
+              // Set up foreground message handler
+              onMessage(messaging, (payload) => {
+                console.log('Foreground message received:', payload);
+                
+                // Add notification to UI
+                if (payload.notification) {
+                  addNotificationToUI({
+                    title: payload.notification.body || '',
+                    timestamp: new Date(),
+                    status: 'New',
+                    id: payload.data?.notificationId || Date.now()
+                  });
+                }
+              });
+            } else {
+              console.error('No FCM token available');
+              showFCMError('Не вдалося отримати токен для сповіщень. Push-сповіщення можуть не працювати');
+            }
+          } else if (permission === 'denied') {
+            console.info('ℹ️ Notification permission denied by user');
+            showFCMError('💡 Дозвіл на сповіщення відхилено. Щоб отримувати push-сповіщення, увімкніть їх у налаштуваннях браузера');
+          } else {
+            console.info('ℹ️ Notification permission not granted yet');
+            showFCMError('💡 Дозвіл на сповіщення не надано. Натисніть "Дозволити" щоб отримувати push-сповіщення');
+          }
+        } catch (error: any) {
+          console.error('FCM initialization error:', error);
+          
+          // Provide specific error messages based on error type
+          if (error.code === 'messaging/failed-service-worker-registration') {
+            showFCMError('Помилка реєстрації Service Worker. Перезавантажте сторінку');
+          } else if (error.code === 'messaging/permission-blocked') {
+            showFCMError('Дозвіл на сповіщення заблоковано. Увімкніть їх у налаштуваннях браузера');
+          } else if (error.code === 'messaging/unsupported-browser') {
+            showFCMError('Ваш браузер не підтримує push-сповіщення');
+          } else {
+            showFCMError('Помилка ініціалізації сповіщень. Спробуйте перезавантажити сторінку');
+          }
+        }
+      }
+
+      // Register FCM token with backend using SSR (form submission)
+      async function registerFCMToken(fcmToken: string) {
+        try {
+          console.log('Registering FCM token via SSR...');
+          
+          // Create form data
+          const formData = new FormData();
+          formData.append('fcm_token', fcmToken);
+
+          // Submit to SSR endpoint (no timeout needed - server-side is fast)
+          const response = await fetch('/register-fcm', {
+            method: 'POST',
+            body: formData
+          });
+
+          const data = await response.json();
+
+          if (data.success) {
+            console.log('✅ FCM token registered successfully');
+          } else {
+            console.error('❌ FCM registration failed:', data.error);
+          }
+        } catch (error: any) {
+          console.error('⚠️ Error registering FCM token:', error.message);
+          // Don't show error to user - app will still work, just no push notifications
+        }
+      }
+
+      // Update unread count in UI
+      function updateUnreadCount() {
+        const unreadCountElement = document.getElementById('unreadCount');
+        if (unreadCountElement) {
+          const unreadNotifications = document.querySelectorAll('.notification-item[data-status="New"]');
+          unreadCountElement.textContent = String(unreadNotifications.length);
+        }
+      }
+
+      // Add new notification to UI dynamically
+      function addNotificationToUI(notification: { title: string; timestamp: Date; status: string; id: number | string }) {
+        const notificationsList = document.getElementById('notificationsList');
+        const markAllReadButton = document.getElementById('markAllReadButton') as HTMLButtonElement;
+        
+        if (!notificationsList) return;
+
+        // Format timestamp
+        const d = new Date(notification.timestamp);
+        const day = String(d.getDate()).padStart(2, '0');
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const year = String(d.getFullYear()).slice(-2);
+        const hours = String(d.getHours()).padStart(2, '0');
+        const minutes = String(d.getMinutes()).padStart(2, '0');
+        const formattedDate = `${day}.${month}.${year} ${hours}:${minutes}`;
+
+        // Create notification element
+        const notificationDiv = document.createElement('div');
+        notificationDiv.className = 'notification-item bg-[#3A4556] rounded-2xl p-3 sm:p-4 hover:bg-[#4A5568] active:bg-[#4A5568] transition-colors cursor-pointer';
+        notificationDiv.setAttribute('data-id', String(notification.id));
+        notificationDiv.setAttribute('data-status', notification.status);
+        
+        notificationDiv.innerHTML = `
+          <div class="flex items-start gap-2 sm:gap-3">
+            ${notification.status === 'New' ? `
+              <div class="flex-shrink-0 mt-1">
+                <svg class="w-5 h-5 sm:w-6 sm:h-6 text-yellow-500" fill="currentColor" viewBox="0 0 20 20">
+                  <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                </svg>
+              </div>
+            ` : ''}
+            <div class="flex-1 min-w-0">
+              <p class="text-white text-sm sm:text-base mb-1.5 sm:mb-2 break-words leading-relaxed">
+                ${notification.title}
+              </p>
+              <p class="text-slate-400 text-xs sm:text-sm">
+                ${formattedDate}
+              </p>
+            </div>
+            ${notification.status === 'New' ? `
+              <span class="notification-badge flex-shrink-0 px-2 sm:px-3 py-0.5 sm:py-1 bg-[#4A5568] text-white text-[10px] sm:text-xs font-medium rounded-lg">
+                Нове
+              </span>
+            ` : ''}
+          </div>
+        `;
+
+        // Add click handler for marking as read
+        notificationDiv.addEventListener('click', async () => {
+          const id = notificationDiv.getAttribute('data-id');
+          const status = notificationDiv.getAttribute('data-status');
+
+          if (status === 'New' && id) {
+            await markNotificationAsRead(notificationDiv, id);
+          }
+        });
+
+        // Insert at the top of the list
+        notificationsList.insertBefore(notificationDiv, notificationsList.firstChild);
+
+        // Update unread count
+        updateUnreadCount();
+
+        // Enable "Mark all as read" button if there are new notifications
+        if (markAllReadButton && notification.status === 'New') {
+          markAllReadButton.disabled = false;
+        }
+      }
+
+      // Retry button handler for network errors
+      const retryNetworkButton = document.getElementById('retryNetworkButton');
+      retryNetworkButton?.addEventListener('click', async () => {
+        hideNetworkError();
+        // Retry the last failed operation (mark all as read)
+        await performMarkAllRead(true);
+      });
+
+      // Monitor online/offline status
+      window.addEventListener('online', () => {
+        hideNetworkError();
+        console.log('Connection restored');
+      });
+
+      window.addEventListener('offline', () => {
+        showNetworkError('Відсутнє інтернет-з\'єднання. Деякі функції можуть не працювати');
+      });
+
+      // Initialize FCM on page load
+      initializeFCM();
+
+      // Update check functionality
+      const updateCheckButton = document.getElementById('updateCheckButton');
+      updateCheckButton?.addEventListener('click', async () => {
+        try {
+          if (!('serviceWorker' in navigator)) {
+            alert('Service Worker не підтримується вашим браузером');
+            return;
+          }
+
+          // Disable button during check
+          const button = updateCheckButton as HTMLButtonElement;
+          button.disabled = true;
+          button.style.opacity = '0.5';
+
+          // Get the service worker registration
+          const registration = await navigator.serviceWorker.getRegistration();
+          
+          if (!registration) {
+            button.disabled = false;
+            button.style.opacity = '1';
+            alert('Service Worker не зареєстровано');
+            return;
+          }
+
+          // Check for updates
+          await registration.update();
+
+          // Wait a bit for the update to be detected
+          await new Promise(resolve => setTimeout(resolve, 1000));
+
+          // Check if there's a waiting service worker (new version available)
+          if (registration.waiting) {
+            // New version is available
+            const shouldUpdate = confirm('Доступна нова версія додатку. Оновити зараз?');
+            
+            if (shouldUpdate) {
+              // Tell the waiting service worker to skip waiting and activate
+              registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+              
+              // Listen for the controller change (new SW activated)
+              navigator.serviceWorker.addEventListener('controllerchange', () => {
+                // Reload the page to use the new service worker
+                window.location.reload();
+              });
+            } else {
+              button.disabled = false;
+              button.style.opacity = '1';
+            }
+          } else if (registration.installing) {
+            // Update is being installed
+            alert('Оновлення встановлюється. Будь ласка, зачекайте...');
+            button.disabled = false;
+            button.style.opacity = '1';
+          } else {
+            // No update available
+            alert('Додаток вже оновлено до останньої версії');
+            button.disabled = false;
+            button.style.opacity = '1';
+          }
+        } catch (error) {
+          console.error('Update check error:', error);
+          alert('Помилка при перевірці оновлень');
+          const button = updateCheckButton as HTMLButtonElement;
+          button.disabled = false;
+          button.style.opacity = '1';
+        }
+      });
+
+      // Mark all as read functionality with retry
+      const markAllReadButton = document.getElementById('markAllReadButton') as HTMLButtonElement;
+      let markAllRetryCount = 0;
+      const MAX_MARK_ALL_RETRIES = 2;
+
+      async function performMarkAllRead(isRetry: boolean = false) {
+        try {
+          const originalText = markAllReadButton.textContent;
+          markAllReadButton.disabled = true;
+          markAllReadButton.textContent = 'Обробка...';
+
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+          const response = await fetch('/mark-read', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ all: true }),
+            signal: controller.signal
+          });
+
+          clearTimeout(timeoutId);
+
+          if (response.ok) {
+            // Remove all "Нове" badges and warning icons
+            const badges = document.querySelectorAll('.notification-badge');
+            badges.forEach(badge => badge.remove());
+            
+            const warningIcons = document.querySelectorAll('.notification-item svg.text-yellow-500');
+            warningIcons.forEach(icon => icon.parentElement?.remove());
+
+            // Update all notification statuses
+            const items = document.querySelectorAll('.notification-item');
+            items.forEach(item => {
+              item.setAttribute('data-status', 'Read');
+            });
+
+            // Update unread count to 0
+            updateUnreadCount();
+
+            // Keep button disabled since all are now read
+            markAllReadButton.textContent = 'Всі прочитані';
+            markAllRetryCount = 0;
+            hideNetworkError();
+          } else {
+            throw new Error(`Server error: ${response.status}`);
+          }
+        } catch (error: any) {
+          console.error('Mark all read error:', error);
+          
+          let errorMsg = 'Помилка при позначенні сповіщень';
+          
+          if (error.name === 'AbortError') {
+            errorMsg = 'Час очікування відповіді вичерпано';
+          } else if (!navigator.onLine) {
+            errorMsg = 'Відсутнє інтернет-з\'єднання';
+          }
+
+          if (isRetry) {
+            markAllRetryCount++;
+          }
+
+          if (markAllRetryCount < MAX_MARK_ALL_RETRIES) {
+            showNetworkError(`${errorMsg}. Натисніть "Спробувати знову" для повторної спроби`);
+          } else {
+            showNetworkError(`${errorMsg}. Досягнуто максимальну кількість спроб`);
+          }
+
+          markAllReadButton.disabled = false;
+          markAllReadButton.textContent = 'Всі прочитані';
+        }
+      }
+
+      markAllReadButton?.addEventListener('click', async () => {
+        await performMarkAllRead(false);
+      });
+
+      // Mark individual notification as read with retry
+      async function markNotificationAsRead(item: Element, id: string, retryCount: number = 0): Promise<boolean> {
+        const MAX_RETRIES = 2;
+        
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+
+          const response = await fetch('/mark-read', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ id: parseInt(id) }),
+            signal: controller.signal
+          });
+
+          clearTimeout(timeoutId);
+
+          if (response.ok) {
+            // Remove the "Нове" badge and warning icon
+            const badge = item.querySelector('.notification-badge');
+            badge?.remove();
+            
+            const warningIcon = item.querySelector('svg.text-yellow-500');
+            warningIcon?.parentElement?.remove();
+
+            // Update status
+            item.setAttribute('data-status', 'Read');
+
+            // Update unread count
+            updateUnreadCount();
+
+            // Check if all notifications are now read
+            const remainingNew = document.querySelectorAll('.notification-item[data-status="New"]');
+            if (remainingNew.length === 0 && markAllReadButton) {
+              markAllReadButton.disabled = true;
+            }
+
+            hideNetworkError();
+            return true;
+          } else {
+            throw new Error(`Server error: ${response.status}`);
+          }
+        } catch (error: any) {
+          console.error('Mark read error:', error);
+          
+          if (retryCount < MAX_RETRIES) {
+            // Automatically retry once
+            console.log(`Retrying mark as read (attempt ${retryCount + 1}/${MAX_RETRIES})`);
+            await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second before retry
+            return markNotificationAsRead(item, id, retryCount + 1);
+          } else {
+            // Show error after max retries
+            let errorMsg = 'Не вдалося позначити сповіщення як прочитане';
+            
+            if (error.name === 'AbortError') {
+              errorMsg = 'Час очікування відповіді вичерпано';
+            } else if (!navigator.onLine) {
+              errorMsg = 'Відсутнє інтернет-з\'єднання';
+            }
+            
+            showNetworkError(errorMsg);
+            return false;
+          }
+        }
+      }
+
+      // Mark individual notification as read
+      const notificationItems = document.querySelectorAll('.notification-item');
+      notificationItems.forEach(item => {
+        item.addEventListener('click', async () => {
+          const id = item.getAttribute('data-id');
+          const status = item.getAttribute('data-status');
+
+          // Only mark as read if it's currently "New"
+          if (status === 'New' && id) {
+            await markNotificationAsRead(item, id);
+          }
+        });
+      });
+    </script>
+</BaseLayout>

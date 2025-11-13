@@ -1,0 +1,227 @@
+---
+// Test page for sending notifications
+import { requireAuth } from '../lib/auth-middleware';
+
+const username = requireAuth(Astro.cookies);
+if (!username) {
+  return Astro.redirect('/');
+}
+
+let result = { success: false, message: '', error: '' };
+
+if (Astro.request.method === 'POST') {
+  try {
+    const formData = await Astro.request.formData();
+    const notification_title = formData.get('notification_title')?.toString();
+    const target_username = formData.get('target_username')?.toString() || username;
+
+    console.log('=== Test Notification ===');
+    console.log('From:', username);
+    console.log('To:', target_username);
+    console.log('Title:', notification_title);
+
+    if (!notification_title) {
+      result = { success: false, message: '', error: 'Notification title required' };
+    } else {
+      // Call webhook endpoint
+      const webhookUrl = `${Astro.url.origin}/webhook`;
+      
+      console.log('Calling webhook:', webhookUrl);
+      
+      const response = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          username: target_username,
+          notification_title: notification_title
+        })
+      });
+
+      const data = await response.json();
+      
+      if (response.ok) {
+        console.log('✅ Notification sent successfully');
+        result = { 
+          success: true, 
+          message: `Notification sent to ${target_username}!`,
+          error: '' 
+        };
+      } else {
+        console.error('❌ Failed to send notification:', data);
+        result = { 
+          success: false, 
+          message: '',
+          error: data.error || 'Failed to send notification' 
+        };
+      }
+    }
+  } catch (error: any) {
+    console.error('❌ Error sending notification:', error);
+    result = { 
+      success: false, 
+      message: '',
+      error: error.message || 'Server error' 
+    };
+  }
+}
+---
+
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Notifications - СВУП</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            padding: 20px;
+            background: #1e293b;
+            color: #fff;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #3b82f6;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #94a3b8;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 10px;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 5px;
+            color: #fff;
+            font-size: 14px;
+        }
+        input:focus, textarea:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+        button {
+            padding: 12px 24px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            width: 100%;
+        }
+        button:hover {
+            background: #2563eb;
+        }
+        .success {
+            background: #10b981;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .error {
+            background: #ef4444;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .info {
+            background: #0f172a;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            border: 1px solid #334155;
+        }
+        .back-link {
+            display: inline-block;
+            margin-top: 20px;
+            color: #3b82f6;
+            text-decoration: none;
+        }
+        .back-link:hover {
+            text-decoration: underline;
+        }
+        code {
+            background: #0f172a;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧪 Test Push Notifications</h1>
+    
+    <div class="info">
+        <strong>ℹ️ Інструкція:</strong>
+        <ol>
+            <li>Переконайтесь що ви дозволили сповіщення в браузері</li>
+            <li>Відкрийте сторінку <code>/notifications</code> в іншій вкладці</li>
+            <li>Заповніть форму нижче і натисніть "Відправити"</li>
+            <li>Сповіщення має з'явитися на сторінці notifications</li>
+        </ol>
+        <p><strong>Поточний користувач:</strong> <code>{username}</code></p>
+    </div>
+
+    {result.success && (
+        <div class="success">
+            ✅ {result.message}
+        </div>
+    )}
+
+    {result.error && (
+        <div class="error">
+            ❌ {result.error}
+        </div>
+    )}
+
+    <form method="POST">
+        <div class="form-group">
+            <label for="target_username">Кому (username):</label>
+            <input 
+                type="text" 
+                id="target_username" 
+                name="target_username" 
+                value={username}
+                placeholder="operator123"
+            />
+            <small style="color: #64748b;">Залиште порожнім щоб відправити собі</small>
+        </div>
+
+        <div class="form-group">
+            <label for="notification_title">Текст сповіщення:</label>
+            <textarea 
+                id="notification_title" 
+                name="notification_title" 
+                rows="3"
+                placeholder="⚠️ Нагадування: Завдання 'СЕДО' закінчується завтра (12.11.2025 о 10:00)!"
+                required
+            ></textarea>
+        </div>
+
+        <button type="submit">📤 Відправити сповіщення</button>
+    </form>
+
+    <a href="/notifications" class="back-link">← Назад до сповіщень</a>
+
+    <div class="info" style="margin-top: 30px;">
+        <strong>💡 Як це працює:</strong>
+        <ol>
+            <li>Форма відправляє POST запит на цю ж сторінку (SSR)</li>
+            <li>SSR викликає <code>/webhook</code></li>
+            <li>Webhook зберігає сповіщення в БД</li>
+            <li>Webhook знаходить FCM токен користувача</li>
+            <li>Webhook відправляє push через Firebase Admin SDK</li>
+            <li>Firebase доставляє сповіщення на пристрій</li>
+            <li>Сповіщення з'являється на сторінці notifications</li>
+        </ol>
+    </div>
+</body>
+</html>

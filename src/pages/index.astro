@@ -1,11 +1,176 @@
 ---
-import Welcome from '../components/Welcome.astro';
-import Layout from '../layouts/Layout.astro';
+// Server-side login handling
+import BaseLayout from "../layouts/BaseLayout.astro";
 
-// Welcome to Astro! Wondering what to do next? Check out the Astro documentation at https://docs.astro.build
-// Don't want to use any of this? Delete everything in this file, the `assets`, `components`, and `layouts` directories, and start fresh.
+const token = Astro.cookies.get('jwt_token')?.value;
+if (token) {
+  return Astro.redirect('/notifications');
+}
+
+let errorMessage = '';
+
+// Handle form submission
+if (Astro.request.method === 'POST') {
+  try {
+    const formData = await Astro.request.formData();
+    const username = formData.get('username')?.toString();
+    const password = formData.get('password')?.toString();
+    const totp_code = formData.get('totp_code')?.toString();
+
+    console.log('=== Server-side login attempt ===');
+    console.log('Username:', username);
+
+    // Validate input
+    if (!username || !password || !totp_code) {
+      errorMessage = 'Всі поля обов\'язкові';
+    } else if (totp_code.length !== 6 || !/^\d{6}$/.test(totp_code)) {
+      errorMessage = 'TOTP код має містити 6 цифр';
+    } else {
+      // Call backend API
+      const backendUrl = import.meta.env.BACKEND_API_URL || 'https://firebackend-6c859a037589.herokuapp.com/api';
+      console.log('Calling backend:', `${backendUrl}/allauth/login/`);
+      
+      const startTime = Date.now();
+      const response = await fetch(`${backendUrl}/allauth/login/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password, totp_code })
+      });
+      
+      const duration = Date.now() - startTime;
+      console.log(`Backend response in ${duration}ms, status:`, response.status);
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log('Login successful');
+        
+        // Set cookies
+        Astro.cookies.set('jwt_token', data.access_token, {
+          httpOnly: true,
+          secure: true,
+          sameSite: 'strict',
+          maxAge: 86400,
+          path: '/'
+        });
+        
+        Astro.cookies.set('username', username, {
+          httpOnly: true,
+          secure: true,
+          sameSite: 'strict',
+          maxAge: 86400,
+          path: '/'
+        });
+        
+        // Redirect to notifications
+        return Astro.redirect('/notifications');
+      } else {
+        const errorData = await response.json();
+        console.log('Login failed:', errorData);
+        
+        // Map error messages
+        if (errorData.error?.includes('TOTP')) {
+          errorMessage = 'Невірний TOTP код. Перевірте код у вашому додатку автентифікації';
+        } else if (errorData.error?.includes('username') || errorData.error?.includes('password')) {
+          errorMessage = 'Невірний username або password. Перевірте введені дані';
+        } else {
+          errorMessage = errorData.error || 'Помилка автентифікації';
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Login error:', error);
+    errorMessage = 'Помилка сервера. Спробуйте пізніше';
+  }
+}
 ---
 
-<Layout>
-	<Welcome />
-</Layout>
+<BaseLayout title="Вхід в систему - СВУП">
+  <div class="min-h-screen flex items-center justify-center p-4 sm:p-6">
+    <div class="w-full max-w-md bg-[#3A4556] rounded-2xl p-6 sm:p-8">
+      <!-- Logo -->
+      <div class="flex justify-center mb-6 sm:mb-8">
+        <img src="/shevron1.png" alt="СВУП" class="w-20 h-20 sm:w-24 sm:h-24 object-contain" />
+      </div>
+
+      <!-- Title -->
+      <h1 class="text-white text-xl sm:text-2xl font-semibold text-center mb-6 sm:mb-8">
+        Вхід в систему
+      </h1>
+
+      <!-- Login Form -->
+      <form method="POST" class="space-y-3 sm:space-y-4">
+        {errorMessage && (
+          <div class="bg-red-500/10 border border-red-500 text-red-500 px-3 sm:px-4 py-2.5 sm:py-3 rounded-lg text-xs sm:text-sm">
+            <div class="flex items-start gap-2">
+              <svg class="w-4 h-4 sm:w-5 sm:h-5 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+              </svg>
+              <p class="flex-1 min-w-0 break-words">{errorMessage}</p>
+            </div>
+          </div>
+        )}
+
+        <!-- Username Field -->
+        <div>
+          <input
+            type="text"
+            id="username"
+            name="username"
+            placeholder="Ім'я користувача"
+            autocomplete="username"
+            class="w-full px-3 sm:px-4 py-2.5 sm:py-3 bg-transparent text-white text-sm sm:text-base rounded-lg border border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-transparent placeholder:text-slate-400"
+            required
+          />
+        </div>
+
+        <!-- Password Field -->
+        <div>
+          <input
+            type="password"
+            id="password"
+            name="password"
+            placeholder="Пароль"
+            autocomplete="current-password"
+            class="w-full px-3 sm:px-4 py-2.5 sm:py-3 bg-transparent text-white text-sm sm:text-base rounded-lg border border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-transparent placeholder:text-slate-400"
+            required
+          />
+        </div>
+
+        <!-- TOTP Code Field -->
+        <div>
+          <input
+            type="text"
+            id="totpCode"
+            name="totp_code"
+            placeholder="TOTP код"
+            inputmode="numeric"
+            pattern="[0-9]{6}"
+            maxlength="6"
+            autocomplete="one-time-code"
+            class="w-full px-3 sm:px-4 py-2.5 sm:py-3 bg-transparent text-white text-sm sm:text-base rounded-lg border border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-transparent placeholder:text-slate-400"
+            required
+          />
+        </div>
+
+        <!-- Submit Button -->
+        <button
+          type="submit"
+          class="w-full py-2.5 sm:py-3 bg-[#4A5568] text-white text-sm sm:text-base font-medium rounded-lg hover:bg-[#5A6578] focus:outline-none focus:ring-2 focus:ring-slate-400 transition-colors mt-2"
+        >
+          Увійти
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    // Simple client-side validation for TOTP field
+    const totpInput = document.getElementById('totpCode') as HTMLInputElement;
+    
+    totpInput?.addEventListener('input', (e) => {
+      const target = e.target as HTMLInputElement;
+      // Only allow digits
+      target.value = target.value.replace(/\D/g, '').slice(0, 6);
+    });
+  </script>
+</BaseLayout>

@@ -1,0 +1,68 @@
+---
+// Server-side FCM token registration
+import { requireAuth } from '../lib/auth-middleware';
+import { db, FCMToken, eq } from 'astro:db';
+
+const username = requireAuth(Astro.cookies);
+if (!username) {
+  return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+    status: 401,
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
+
+let result = { success: false, error: '' };
+
+if (Astro.request.method === 'POST') {
+  try {
+    const formData = await Astro.request.formData();
+    const fcm_token = formData.get('fcm_token')?.toString();
+
+    console.log('=== FCM Token Registration (SSR) ===');
+    console.log('User:', username);
+    console.log('Token:', fcm_token?.substring(0, 20) + '...');
+
+    if (!fcm_token) {
+      result = { success: false, error: 'FCM token required' };
+    } else {
+      // Check if token exists
+      const existing = await db
+        .select()
+        .from(FCMToken)
+        .where(eq(FCMToken.username, username))
+        .get();
+
+      if (existing) {
+        console.log('Updating existing FCM token');
+        await db
+          .update(FCMToken)
+          .set({ 
+            fcm_token,
+            updated_at: new Date()
+          })
+          .where(eq(FCMToken.username, username));
+      } else {
+        console.log('Inserting new FCM token');
+        await db.insert(FCMToken).values({
+          username,
+          fcm_token,
+          created_at: new Date(),
+          updated_at: new Date()
+        });
+      }
+
+      console.log('✅ FCM token saved successfully');
+      result = { success: true, error: '' };
+    }
+  } catch (error) {
+    console.error('❌ FCM token registration error:', error);
+    result = { success: false, error: 'Failed to register FCM token' };
+  }
+}
+
+// Return JSON response
+return new Response(JSON.stringify(result), {
+  status: result.success ? 200 : 400,
+  headers: { 'Content-Type': 'application/json' }
+});
+---

@@ -3,12 +3,20 @@
   "type": "module",
   "version": "0.0.1",
   "scripts": {
-    "dev": "astro dev",
-    "build": "astro build",
+    "dev": "astro dev --remote",
+    "build": "astro build --remote",
     "preview": "astro preview",
     "astro": "astro"
   },
   "dependencies": {
-    "astro": "^5.15.5"
+    "@astrojs/check": "^0.9.5",
+    "@astrojs/db": "^0.18.2",
+    "@astrojs/netlify": "^6.6.0",
+    "@tailwindcss/vite": "^4.1.17",
+    "astro": "^5.15.5",
+    "firebase": "^12.5.0",
+    "firebase-admin": "^13.6.0",
+    "tailwindcss": "^4.1.17",
+    "typescript": "^5.9.3"
   }
 }

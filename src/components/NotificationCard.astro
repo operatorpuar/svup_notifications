@@ -1,0 +1,50 @@
+---
+interface Props {
+  id: number;
+  title: string;
+  createdAt: Date;
+  status: string;
+}
+
+const { id, title, createdAt, status } = Astro.props;
+
+// Format date helper function
+function formatDate(date: Date): string {
+  const d = new Date(date);
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = String(d.getFullYear()).slice(-2);
+  const hours = String(d.getHours()).padStart(2, '0');
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+  return `${day}.${month}.${year} ${hours}:${minutes}`;
+}
+---
+
+<div
+  class="notification-item bg-[#3A4556] rounded-2xl p-3 sm:p-4 hover:bg-[#4A5568] active:bg-[#4A5568] transition-colors cursor-pointer"
+  data-id={id}
+  data-status={status}
+>
+  <div class="flex items-start gap-2 sm:gap-3">
+    {status === 'New' && (
+      <div class="flex-shrink-0 mt-1">
+        <svg class="w-5 h-5 sm:w-6 sm:h-6 text-yellow-500" fill="currentColor" viewBox="0 0 20 20">
+          <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+        </svg>
+      </div>
+    )}
+    <div class="flex-1 min-w-0">
+      <p class="text-white text-sm sm:text-base mb-1.5 sm:mb-2 break-words leading-relaxed">
+        {title}
+      </p>
+      <p class="text-slate-400 text-xs sm:text-sm">
+        {formatDate(createdAt)}
+      </p>
+    </div>
+    {status === 'New' && (
+      <span class="notification-badge flex-shrink-0 px-2 sm:px-3 py-0.5 sm:py-1 bg-[#4A5568] text-white text-[10px] sm:text-xs font-medium rounded-lg">
+        Нове
+      </span>
+    )}
+  </div>
+</div>
