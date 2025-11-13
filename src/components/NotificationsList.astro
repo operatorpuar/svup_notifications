@@ -1,9 +1,14 @@
 ---
 interface Props {
   unreadCount: number;
+  currentPage?: number;
+  totalCount?: number;
+  itemsPerPage?: number;
 }
 
-const { unreadCount } = Astro.props;
+const { unreadCount, currentPage = 1, totalCount = 0, itemsPerPage = 10 } = Astro.props;
+const showingFrom = totalCount > 0 ? ((currentPage - 1) * itemsPerPage) + 1 : 0;
+const showingTo = Math.min(currentPage * itemsPerPage, totalCount);
 ---
 
 <!-- Notifications Section Header -->
@@ -13,9 +18,16 @@ const { unreadCount } = Astro.props;
       <svg class="w-5 h-5 sm:w-6 sm:h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
       </svg>
-      <h1 class="text-white text-base sm:text-lg font-medium whitespace-nowrap">
-        Сповіщення (<span id="unreadCount">{unreadCount}</span>)
-      </h1>
+      <div class="flex flex-col">
+        <h1 class="text-white text-base sm:text-lg font-medium whitespace-nowrap">
+          Сповіщення (<span id="unreadCount">{unreadCount}</span>)
+        </h1>
+        {totalCount > 0 && (
+          <p class="text-slate-400 text-xs mt-0.5">
+            {showingFrom}-{showingTo} з {totalCount}
+          </p>
+        )}
+      </div>
     </div>
     <button
       id="markAllReadButton"

@@ -14,26 +14,55 @@ if (!username) {
   return Astro.redirect('/');
 }
 
-// Fetch notifications from database
+// Pagination settings
+const ITEMS_PER_PAGE = 10;
+const page = parseInt(Astro.url.searchParams.get('page') || '1');
+const offset = (page - 1) * ITEMS_PER_PAGE;
+
+// Fetch notifications from database with pagination
 const notifications = await db
   .select()
   .from(Notification)
   .where(eq(Notification.username, username))
-  .orderBy(desc(Notification.created_at));
+  .orderBy(desc(Notification.created_at))
+  .limit(ITEMS_PER_PAGE)
+  .offset(offset);
 
-// Count unread notifications
-const unreadCount = notifications.filter(n => n.status === 'New').length;
+// Get total count for pagination
+const allNotifications = await db
+  .select()
+  .from(Notification)
+  .where(eq(Notification.username, username));
+
+const totalCount = allNotifications.length;
+const hasMore = totalCount > (page * ITEMS_PER_PAGE);
+
+// Count unread notifications (from all, not just current page)
+const unreadCount = allNotifications.filter(n => n.status === 'New').length;
 ---
 
 <BaseLayout title="Сповіщення - СВУП">
   <Header />
+
+  <!-- Toast notification -->
+  <div id="toast" class="fixed top-20 right-4 bg-slate-800 text-white px-4 py-3 rounded-lg shadow-lg opacity-0 transition-opacity duration-300 z-[9999] max-w-sm pointer-events-none">
+    <div class="flex items-center gap-3">
+      <span id="toastIcon" class="text-xl"></span>
+      <span id="toastMessage" class="text-sm"></span>
+    </div>
+  </div>
 
   <!-- Main Content -->
   <main class="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
     <ErrorMessage id="fcmError" type="warning" showRetry={false} />
     <ErrorMessage id="networkError" type="error" showRetry={true} />
 
-    <NotificationsList unreadCount={unreadCount}>
+    <NotificationsList 
+      unreadCount={unreadCount}
+      currentPage={page}
+      totalCount={totalCount}
+      itemsPerPage={ITEMS_PER_PAGE}
+    >
       {notifications.length === 0 ? (
         <div class="bg-[#3A4556] rounded-2xl p-4 sm:p-6 text-center">
           <p class="text-slate-400 text-sm sm:text-base">Немає сповіщень</p>
@@ -49,6 +78,29 @@ const unreadCount = notifications.filter(n => n.status === 'New').length;
         ))
       )}
     </NotificationsList>
+
+    <!-- Pagination -->
+    {hasMore && (
+      <div class="mt-6 text-center">
+        <a
+          href={`/notifications?page=${page + 1}`}
+          class="inline-block px-6 py-3 bg-[#4A5568] text-white text-sm font-medium rounded-lg hover:bg-[#5A6578] transition-colors"
+        >
+          Завантажити ще ({totalCount - (page * ITEMS_PER_PAGE)} залишилось)
+        </a>
+      </div>
+    )}
+
+    {page > 1 && (
+      <div class="mt-4 text-center">
+        <a
+          href={`/notifications?page=${page - 1}`}
+          class="inline-block px-4 py-2 text-slate-400 text-sm hover:text-white transition-colors"
+        >
+          ← Назад
+        </a>
+      </div>
+    )}
   </main>
 
     <script>
@@ -309,6 +361,46 @@ const unreadCount = notifications.filter(n => n.status === 'New').length;
         showNetworkError('Відсутнє інтернет-з\'єднання. Деякі функції можуть не працювати');
       });
 
+      // Toast notification function
+      function showToast(message: string, type: 'success' | 'error' | 'info' = 'info') {
+        const toast = document.getElementById('toast');
+        const toastMessage = document.getElementById('toastMessage');
+        const toastIcon = document.getElementById('toastIcon');
+        
+        if (!toast || !toastMessage || !toastIcon) {
+          console.error('Toast elements not found');
+          return;
+        }
+        
+        // Set icon and color based on type
+        const config = {
+          success: { icon: '✅', bg: 'bg-green-600' },
+          error: { icon: '❌', bg: 'bg-red-600' },
+          info: { icon: 'ℹ️', bg: 'bg-blue-600' }
+        };
+        
+        const { icon, bg } = config[type];
+        toastIcon.textContent = icon;
+        
+        // Update background color
+        toast.className = `fixed top-20 right-4 ${bg} text-white px-4 py-3 rounded-lg shadow-lg opacity-0 transition-opacity duration-300 z-[9999] max-w-sm`;
+        
+        // Set message
+        toastMessage.textContent = message;
+        
+        console.log('Showing toast:', message, type);
+        
+        // Show toast
+        setTimeout(() => {
+          toast.style.opacity = '1';
+        }, 10);
+        
+        // Hide after 3 seconds
+        setTimeout(() => {
+          toast.style.opacity = '0';
+        }, 3000);
+      }
+
       // Initialize FCM on page load
       initializeFCM();
 
@@ -317,7 +409,7 @@ const unreadCount = notifications.filter(n => n.status === 'New').length;
       updateCheckButton?.addEventListener('click', async () => {
         try {
           if (!('serviceWorker' in navigator)) {
-            alert('Service Worker не підтримується вашим браузером');
+            showToast('Service Worker не підтримується', 'error');
             return;
           }
 
@@ -326,13 +418,15 @@ const unreadCount = notifications.filter(n => n.status === 'New').length;
           button.disabled = true;
           button.style.opacity = '0.5';
 
+          showToast('Перевірка оновлень...', 'info');
+
           // Get the service worker registration
           const registration = await navigator.serviceWorker.getRegistration();
           
           if (!registration) {
+            showToast('Service Worker не зареєстровано', 'error');
             button.disabled = false;
             button.style.opacity = '1';
-            alert('Service Worker не зареєстровано');
             return;
           }
 
@@ -344,36 +438,27 @@ const unreadCount = notifications.filter(n => n.status === 'New').length;
 
           // Check if there's a waiting service worker (new version available)
           if (registration.waiting) {
-            // New version is available
-            const shouldUpdate = confirm('Доступна нова версія додатку. Оновити зараз?');
+            showToast('Оновлення додатку...', 'success');
+            // Automatically activate new version
+            registration.waiting.postMessage({ type: 'SKIP_WAITING' });
             
-            if (shouldUpdate) {
-              // Tell the waiting service worker to skip waiting and activate
-              registration.waiting.postMessage({ type: 'SKIP_WAITING' });
-              
-              // Listen for the controller change (new SW activated)
-              navigator.serviceWorker.addEventListener('controllerchange', () => {
-                // Reload the page to use the new service worker
-                window.location.reload();
-              });
-            } else {
-              button.disabled = false;
-              button.style.opacity = '1';
-            }
+            // Listen for the controller change (new SW activated)
+            navigator.serviceWorker.addEventListener('controllerchange', () => {
+              // Reload the page to use the new service worker
+              window.location.reload();
+            });
           } else if (registration.installing) {
-            // Update is being installed
-            alert('Оновлення встановлюється. Будь ласка, зачекайте...');
+            showToast('Оновлення встановлюється...', 'info');
             button.disabled = false;
             button.style.opacity = '1';
           } else {
-            // No update available
-            alert('Додаток вже оновлено до останньої версії');
+            showToast('Додаток вже оновлено', 'success');
             button.disabled = false;
             button.style.opacity = '1';
           }
         } catch (error) {
           console.error('Update check error:', error);
-          alert('Помилка при перевірці оновлень');
+          showToast('Помилка перевірки оновлень', 'error');
           const button = updateCheckButton as HTMLButtonElement;
           button.disabled = false;
           button.style.opacity = '1';
