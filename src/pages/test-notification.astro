@@ -39,7 +39,19 @@ if (Astro.request.method === 'POST') {
         })
       });
 
-      const data = await response.json();
+      let data = { error: 'Unknown error' };
+      
+      try {
+        const responseText = await response.text();
+        if (responseText) {
+          data = JSON.parse(responseText);
+        } else {
+          data = { error: 'Empty response from webhook' };
+        }
+      } catch (jsonError) {
+        console.error('Failed to parse webhook response:', jsonError);
+        data = { error: 'Invalid JSON response from webhook' };
+      }
       
       if (response.ok) {
         console.log('✅ Notification sent successfully');

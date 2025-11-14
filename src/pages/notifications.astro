@@ -300,7 +300,18 @@ const unreadCount = totalCount;
             body: formData
           });
 
-          const data = await response.json();
+          if (!response.ok) {
+            console.error('FCM registration failed:', response.status);
+            return;
+          }
+
+          const responseText = await response.text();
+          if (!responseText) {
+            console.error('Empty response from FCM registration');
+            return;
+          }
+
+          const data = JSON.parse(responseText);
 
           if (!data.success) {
             console.error('FCM registration failed:', data.error);
@@ -338,7 +349,12 @@ const unreadCount = totalCount;
             throw new Error(`Server error: ${response.status}`);
           }
 
-          const result = await response.json();
+          const responseText = await response.text();
+          if (!responseText) {
+            throw new Error('Empty response from save API');
+          }
+
+          const result = JSON.parse(responseText);
           console.log('Save result:', result);
 
           if (result.success) {
@@ -643,7 +659,12 @@ const unreadCount = totalCount;
             throw new Error(`Failed to fetch notifications: ${response.status}`);
           }
 
-          const data = await response.json();
+          const responseText = await response.text();
+          if (!responseText) {
+            throw new Error('Empty response from fetch API');
+          }
+
+          const data = JSON.parse(responseText);
           console.log('[UI Update] Received data:', data);
           
           if (data.success) {

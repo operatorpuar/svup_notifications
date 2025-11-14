@@ -15,7 +15,14 @@ let result = { success: false, message: '', error: '' };
 
 if (Astro.request.method === 'POST') {
   try {
-    const body = await Astro.request.json();
+    const requestText = await Astro.request.text();
+    console.log('Raw request body:', requestText);
+    
+    if (!requestText) {
+      throw new Error('Empty request body');
+    }
+    
+    const body = JSON.parse(requestText);
     const { id, all } = body;
     
     console.log('=== Mark as read ===');
