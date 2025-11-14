@@ -695,6 +695,12 @@ const unreadCount = totalCount;
         
         if (!notificationsList) return;
 
+        // Remove "Немає нових сповіщень" message if it exists
+        const emptyState = notificationsList.querySelector('.bg-\\[\\#3A4556\\] p');
+        if (emptyState && emptyState.textContent?.includes('Немає')) {
+          emptyState.parentElement?.remove();
+        }
+
         // Format timestamp
         const d = new Date(notification.timestamp);
         const day = String(d.getDate()).padStart(2, '0');
@@ -1008,6 +1014,12 @@ const unreadCount = totalCount;
           clearTimeout(timeoutId);
 
           if (response.ok) {
+            // Update status to Read BEFORE hiding (so counter updates correctly)
+            item.setAttribute('data-status', 'Read');
+            
+            // Update unread count immediately
+            updateUnreadCount();
+            
             // Hide notification with fade out animation
             item.style.transition = 'opacity 0.3s ease-out, transform 0.3s ease-out';
             item.style.opacity = '0';
@@ -1027,9 +1039,6 @@ const unreadCount = totalCount;
                 `;
               }
             }, 300);
-
-            // Update unread count
-            updateUnreadCount();
 
             // Check if all notifications are now read
             const remainingNew = document.querySelectorAll('.notification-item[data-status="New"]');
