@@ -952,10 +952,23 @@ const unreadCount = totalCount;
                   </div>
                 `;
               }
+              
+              // Hide pagination buttons since all notifications are gone
+              const paginationButtons = document.querySelectorAll('a[href*="page="]');
+              paginationButtons.forEach(btn => {
+                const parent = btn.parentElement;
+                if (parent) parent.style.display = 'none';
+              });
+              
+              // Hide pagination info text (e.g. "1-10 з 12")
+              const paginationInfo = document.getElementById('paginationInfo');
+              if (paginationInfo) {
+                paginationInfo.style.display = 'none';
+              }
+              
+              // Update unread count to 0 AFTER removing items
+              updateUnreadCount();
             }, 300 + (items.length * 50));
-
-            // Update unread count to 0
-            updateUnreadCount();
 
             // Keep button disabled since all are now read
             markAllReadButton.textContent = 'Всі прочитані';

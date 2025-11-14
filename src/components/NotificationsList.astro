@@ -23,7 +23,7 @@ const showingTo = Math.min(currentPage * itemsPerPage, totalCount);
           Сповіщення (<span id="unreadCount">{unreadCount}</span>)
         </h1>
         {totalCount > 0 && (
-          <p class="text-slate-400 text-xs mt-0.5">
+          <p id="paginationInfo" class="text-slate-400 text-xs mt-0.5">
             {showingFrom}-{showingTo} з {totalCount}
           </p>
         )}
