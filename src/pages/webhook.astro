@@ -1,6 +1,6 @@
 ---
 // Webhook for receiving notifications from external backend
-import { db, Notification, FCMToken, eq } from 'astro:db';
+import { db, FCMToken, eq } from 'astro:db';
 import { initializeApp, cert, getApps, type App } from 'firebase-admin/app';
 import { getMessaging } from 'firebase-admin/messaging';
 
@@ -13,11 +13,20 @@ function getFirebaseAdmin(): App {
     if (existingApps.length > 0) {
       firebaseAdmin = existingApps[0];
     } else {
+      // Validate credentials before initialization
+      const projectId = import.meta.env.FIREBASE_PROJECT_ID;
+      const clientEmail = import.meta.env.FIREBASE_CLIENT_EMAIL;
+      const privateKey = import.meta.env.FIREBASE_PRIVATE_KEY;
+
+      if (!projectId || !clientEmail || !privateKey) {
+        throw new Error('Missing Firebase Admin SDK credentials');
+      }
+
       firebaseAdmin = initializeApp({
         credential: cert({
-          projectId: import.meta.env.FIREBASE_PROJECT_ID,
-          clientEmail: import.meta.env.FIREBASE_CLIENT_EMAIL,
-          privateKey: import.meta.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n')
+          projectId,
+          clientEmail,
+          privateKey: privateKey.replace(/\\n/g, '\n')
         })
       });
     }
@@ -25,14 +34,20 @@ function getFirebaseAdmin(): App {
   return firebaseAdmin;
 }
 
-let result = { success: false, error: '', notification: null as any };
+let result = { success: false, error: '', fcmMessageId: null as string | null };
 
 if (Astro.request.method === 'POST') {
   try {
     console.log('=== Webhook received ===');
     
     const body = await Astro.request.json();
-    const { username, notification_title } = body;
+    let { username, notification_title } = body;
+    
+    // If username not provided in body, try to get from cookies
+    if (!username) {
+      username = Astro.cookies.get('username')?.value;
+      console.log('Username from cookies:', username);
+    }
     
     console.log('Username:', username);
     console.log('Title:', notification_title);
@@ -41,21 +56,9 @@ if (Astro.request.method === 'POST') {
       result = { 
         success: false, 
         error: 'username and notification_title are required',
-        notification: null
+        fcmMessageId: null
       };
     } else {
-      // Insert notification into database
-      console.log('Saving notification to database...');
-      const insertedNotifications = await db.insert(Notification).values({
-        username,
-        notification_title,
-        status: 'New',
-        created_at: new Date()
-      }).returning();
-      
-      const notification = insertedNotifications[0];
-      console.log('✅ Notification saved to database, ID:', notification.id);
-      
       // Get FCM token
       console.log('Looking for FCM token...');
       const fcmRecord = await db
@@ -64,50 +67,82 @@ if (Astro.request.method === 'POST') {
         .where(eq(FCMToken.username, username))
         .get();
       
-      if (fcmRecord?.fcm_token) {
+      if (!fcmRecord?.fcm_token) {
+        console.warn('⚠️ No FCM token found for user');
+        result = {
+          success: false,
+          error: 'No FCM token registered for user',
+          fcmMessageId: null
+        };
+      } else {
         console.log('✅ FCM token found for user');
         try {
           const admin = getFirebaseAdmin();
           const messaging = getMessaging(admin);
           
+          // Generate unique notification ID
+          const notificationId = `notif_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+          
           console.log('Sending push notification...');
-          await messaging.send({
+          // Send FCM push notification (client will save to DB after receiving)
+          const fcmMessageId = await messaging.send({
             token: fcmRecord.fcm_token,
             notification: {
               title: 'СВУП',
               body: notification_title
             },
             data: {
-              notificationId: notification.id.toString(),
-              timestamp: notification.created_at.toISOString()
+              notificationBody: notification_title,
+              notificationId: notificationId,
+              timestamp: new Date().toISOString()
+            },
+            webpush: {
+              fcmOptions: {
+                link: '/notifications'
+              }
             }
           });
-          console.log('✅ Push notification sent successfully');
-        } catch (fcmError) {
+          console.log('✅ Push notification sent successfully, FCM ID:', fcmMessageId);
+          
+          result = {
+            success: true,
+            error: '',
+            fcmMessageId: fcmMessageId
+          };
+        } catch (fcmError: any) {
           console.error('❌ FCM send error:', fcmError);
+          
+          // Handle invalid/expired token
+          if (fcmError.code === 'messaging/invalid-registration-token' || 
+              fcmError.code === 'messaging/registration-token-not-registered') {
+            try {
+              await db.delete(FCMToken).where(eq(FCMToken.username, username));
+              console.log('🗑️ Invalid token removed');
+            } catch (deleteError: any) {
+              console.error('Failed to delete invalid token:', deleteError.message);
+            }
+            
+            result = {
+              success: false,
+              error: 'Invalid or expired FCM token (token removed)',
+              fcmMessageId: null
+            };
+          } else {
+            result = {
+              success: false,
+              error: `FCM send failed: ${fcmError.message}`,
+              fcmMessageId: null
+            };
+          }
         }
-      } else {
-        console.warn('⚠️ No FCM token found for user');
       }
-      
-      result = {
-        success: true,
-        error: '',
-        notification: {
-          id: notification.id,
-          username: notification.username,
-          notification_title: notification.notification_title,
-          status: notification.status,
-          created_at: notification.created_at.toISOString()
-        }
-      };
     }
   } catch (error: any) {
     console.error('❌ Webhook error:', error);
     result = {
       success: false,
       error: error.message || 'Internal server error',
-      notification: null
+      fcmMessageId: null
     };
   }
 }

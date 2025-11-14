@@ -19,7 +19,7 @@ const ITEMS_PER_PAGE = 10;
 const page = parseInt(Astro.url.searchParams.get('page') || '1');
 const offset = (page - 1) * ITEMS_PER_PAGE;
 
-// Fetch notifications from database with pagination
+// Fetch only NEW (unread) notifications from database with pagination
 const notifications = await db
   .select()
   .from(Notification)
@@ -28,17 +28,21 @@ const notifications = await db
   .limit(ITEMS_PER_PAGE)
   .offset(offset);
 
-// Get total count for pagination
-const allNotifications = await db
+// Filter only unread notifications
+const unreadNotifications = notifications.filter(n => n.status === 'New');
+
+// Get total count of unread notifications for pagination
+const allUnreadNotifications = await db
   .select()
   .from(Notification)
   .where(eq(Notification.username, username));
 
-const totalCount = allNotifications.length;
+const allUnread = allUnreadNotifications.filter(n => n.status === 'New');
+const totalCount = allUnread.length;
 const hasMore = totalCount > (page * ITEMS_PER_PAGE);
 
-// Count unread notifications (from all, not just current page)
-const unreadCount = allNotifications.filter(n => n.status === 'New').length;
+// Count unread notifications
+const unreadCount = totalCount;
 ---
 
 <BaseLayout title="Сповіщення - СВУП">
@@ -63,12 +67,12 @@ const unreadCount = allNotifications.filter(n => n.status === 'New').length;
       totalCount={totalCount}
       itemsPerPage={ITEMS_PER_PAGE}
     >
-      {notifications.length === 0 ? (
+      {unreadNotifications.length === 0 ? (
         <div class="bg-[#3A4556] rounded-2xl p-4 sm:p-6 text-center">
-          <p class="text-slate-400 text-sm sm:text-base">Немає сповіщень</p>
+          <p class="text-slate-400 text-sm sm:text-base">Немає нових сповіщень</p>
         </div>
       ) : (
-        notifications.map((notification) => (
+        unreadNotifications.map((notification) => (
           <NotificationCard
             id={notification.id}
             title={notification.notification_title}
@@ -170,11 +174,33 @@ const unreadCount = allNotifications.filter(n => n.status === 'New').length;
         }
       }
 
+      // Request notification permission (according to Firebase docs)
+      async function requestNotificationPermission() {
+        try {
+          const permission = await Notification.requestPermission();
+          if (permission === 'granted') {
+            console.log('Notification permission granted');
+            return true;
+          } else {
+            console.log('Notification permission denied');
+            return false;
+          }
+        } catch (error) {
+          console.error('Error requesting permission:', error);
+          throw error;
+        }
+      }
+
       // Initialize Firebase and FCM
       async function initializeFCM() {
         try {
           // Register service worker first
-          await registerServiceWorker();
+          const registration = await registerServiceWorker();
+          
+          if (!registration) {
+            showFCMError('Service Worker не підтримується або не вдалося зареєструвати');
+            return;
+          }
 
           // Initialize Firebase app
           const app = initializeApp(firebaseConfig);
@@ -184,45 +210,69 @@ const unreadCount = allNotifications.filter(n => n.status === 'New').length;
           const permission = await Notification.requestPermission();
           
           if (permission === 'granted') {
-            console.log('Notification permission granted');
             hideFCMError();
             
             // Get FCM registration token
             const token = await getToken(messaging, { vapidKey: VAPID_KEY });
             
             if (token) {
-              console.log('FCM Token retrieved:', token);
-              
               // Register token with backend
               await registerFCMToken(token);
               
-              // Set up foreground message handler
-              onMessage(messaging, (payload) => {
-                console.log('Foreground message received:', payload);
+              // Handle incoming messages. Called when:
+              // - a message is received while the app has focus
+              // - the user clicks on an app notification created by a service worker
+              onMessage(messaging, async (payload) => {
+                console.log('[Foreground] Message received:', payload);
                 
-                // Add notification to UI
-                if (payload.notification) {
+                // Extract notification data from payload
+                const notificationTitle = payload.notification?.title || 'СВУП';
+                const notificationBody = payload.notification?.body || payload.data?.notificationBody || '';
+                const notificationId = payload.data?.notificationId;
+                
+                console.log('[Foreground] Extracted data:', { 
+                  title: notificationTitle, 
+                  body: notificationBody, 
+                  notificationId 
+                });
+                
+                // Save to database
+                console.log('[Foreground] Saving notification to DB...');
+                const saveResult = await saveNotificationToDB({
+                  notification_title: notificationBody,
+                  fcm_message_id: notificationId,
+                  timestamp: new Date().toISOString()
+                });
+                
+                // Add to UI immediately after successful save
+                if (saveResult) {
+                  console.log('[Foreground] Notification saved, adding to UI...');
+                  
+                  // Add notification to UI
                   addNotificationToUI({
-                    title: payload.notification.body || '',
+                    id: saveResult.notification.id,
+                    title: notificationBody,
                     timestamp: new Date(),
-                    status: 'New',
-                    id: payload.data?.notificationId || Date.now()
+                    status: 'New'
                   });
+                  
+                  showToast('Нове сповіщення отримано!', 'success');
+                } else {
+                  console.warn('[Foreground] Save failed, stored in localStorage');
+                  showToast('Сповіщення отримано (збереження відкладено)', 'warning');
                 }
               });
             } else {
-              console.error('No FCM token available');
               showFCMError('Не вдалося отримати токен для сповіщень. Push-сповіщення можуть не працювати');
             }
           } else if (permission === 'denied') {
-            console.info('ℹ️ Notification permission denied by user');
             showFCMError('💡 Дозвіл на сповіщення відхилено. Щоб отримувати push-сповіщення, увімкніть їх у налаштуваннях браузера');
           } else {
-            console.info('ℹ️ Notification permission not granted yet');
             showFCMError('💡 Дозвіл на сповіщення не надано. Натисніть "Дозволити" щоб отримувати push-сповіщення');
           }
+          
         } catch (error: any) {
-          console.error('FCM initialization error:', error);
+          console.error('FCM initialization error:', error.message);
           
           // Provide specific error messages based on error type
           if (error.code === 'messaging/failed-service-worker-registration') {
@@ -231,22 +281,20 @@ const unreadCount = allNotifications.filter(n => n.status === 'New').length;
             showFCMError('Дозвіл на сповіщення заблоковано. Увімкніть їх у налаштуваннях браузера');
           } else if (error.code === 'messaging/unsupported-browser') {
             showFCMError('Ваш браузер не підтримує push-сповіщення');
+          } else if (error.code === 'messaging/token-subscribe-failed') {
+            showFCMError('Не вдалося підписатися на сповіщення. Перевірте інтернет-з\'єднання');
           } else {
             showFCMError('Помилка ініціалізації сповіщень. Спробуйте перезавантажити сторінку');
           }
         }
       }
 
-      // Register FCM token with backend using SSR (form submission)
+      // Register FCM token with backend
       async function registerFCMToken(fcmToken: string) {
         try {
-          console.log('Registering FCM token via SSR...');
-          
-          // Create form data
           const formData = new FormData();
           formData.append('fcm_token', fcmToken);
 
-          // Submit to SSR endpoint (no timeout needed - server-side is fast)
           const response = await fetch('/register-fcm', {
             method: 'POST',
             body: formData
@@ -254,14 +302,303 @@ const unreadCount = allNotifications.filter(n => n.status === 'New').length;
 
           const data = await response.json();
 
-          if (data.success) {
-            console.log('✅ FCM token registered successfully');
-          } else {
-            console.error('❌ FCM registration failed:', data.error);
+          if (!data.success) {
+            console.error('FCM registration failed:', data.error);
           }
         } catch (error: any) {
-          console.error('⚠️ Error registering FCM token:', error.message);
+          console.error('Error registering FCM token:', error.message);
           // Don't show error to user - app will still work, just no push notifications
+        }
+      }
+
+      // Save notification to database with retry logic
+      async function saveNotificationToDB(data: {
+        notification_title: string;
+        fcm_message_id?: string;
+        timestamp?: string;
+      }, retryCount: number = 0): Promise<any> {
+        const MAX_RETRIES = 2;
+        
+        try {
+          console.log(`Saving notification (attempt ${retryCount + 1}/${MAX_RETRIES + 1}):`, data);
+          
+          const response = await fetch('/api/notifications/save', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(data)
+          });
+
+          console.log('Save response status:', response.status);
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Save error response:', errorText);
+            throw new Error(`Server error: ${response.status}`);
+          }
+
+          const result = await response.json();
+          console.log('Save result:', result);
+
+          if (result.success) {
+            console.log('✅ Notification saved successfully, ID:', result.notification?.id);
+            return result; // Return the full result with notification data
+          } else {
+            throw new Error(result.error || 'Failed to save notification');
+          }
+        } catch (error: any) {
+          console.error('Save error:', error.message);
+          
+          // Determine error type for better user feedback
+          let errorType = 'unknown';
+          if (error.message?.includes('Failed to fetch') || error.message?.includes('NetworkError')) {
+            errorType = 'network';
+          } else if (error.message?.includes('timeout')) {
+            errorType = 'timeout';
+          } else if (error.message?.includes('401')) {
+            errorType = 'auth';
+          }
+          
+          // Retry logic with 1 second delay
+          if (retryCount < MAX_RETRIES) {
+            console.log(`Retrying in 1 second... (attempt ${retryCount + 2}/${MAX_RETRIES + 1})`);
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            return saveNotificationToDB(data, retryCount + 1);
+          } else {
+            console.warn('Max retries reached, storing in localStorage');
+            // Store in localStorage as fallback after all retries failed
+            storeFailedNotification(data);
+            
+            // Show appropriate error message to user
+            if (errorType === 'network') {
+              showToast('Помилка мережі. Сповіщення збережено локально', 'warning');
+            } else if (errorType === 'auth') {
+              showToast('Помилка автентифікації. Будь ласка, увійдіть знову', 'error');
+            } else {
+              showToast('Не вдалося зберегти. Спробуємо пізніше', 'warning');
+            }
+            
+            return null;
+          }
+        }
+      }
+
+      // Store failed notification in localStorage (Task 3.1)
+      function storeFailedNotification(data: {
+        notification_title: string;
+        fcm_message_id?: string;
+        timestamp?: string;
+      }) {
+        try {
+          const pendingKey = 'pending_notifications';
+          const existing = localStorage.getItem(pendingKey);
+          const pending = existing ? JSON.parse(existing) : [];
+          
+          pending.push({
+            ...data,
+            failedAt: new Date().toISOString()
+          });
+          
+          localStorage.setItem(pendingKey, JSON.stringify(pending));
+          console.log('📦 Notification stored in localStorage for later retry');
+        } catch (error) {
+          console.error('Failed to store notification in localStorage:', error);
+        }
+      }
+
+      // Open IndexedDB for reading pending notifications (Task 5)
+      async function openIndexedDB(): Promise<IDBDatabase | null> {
+        return new Promise((resolve, reject) => {
+          try {
+            const request = indexedDB.open('NotificationsDB', 1);
+            
+            request.onerror = () => {
+              console.error('IndexedDB open error:', request.error);
+              resolve(null);
+            };
+            
+            request.onsuccess = () => {
+              resolve(request.result);
+            };
+            
+            request.onupgradeneeded = (event: any) => {
+              const db = event.target.result;
+              if (!db.objectStoreNames.contains('pending-notifications')) {
+                db.createObjectStore('pending-notifications', { keyPath: 'id', autoIncrement: true });
+              }
+            };
+          } catch (error) {
+            console.error('IndexedDB error:', error);
+            resolve(null);
+          }
+        });
+      }
+
+      // Get all pending notifications from IndexedDB (Task 5)
+      async function getPendingFromIndexedDB(): Promise<any[]> {
+        try {
+          const db = await openIndexedDB();
+          if (!db) {
+            return [];
+          }
+
+          return new Promise((resolve, reject) => {
+            try {
+              const transaction = db.transaction(['pending-notifications'], 'readonly');
+              const store = transaction.objectStore('pending-notifications');
+              const request = store.getAll();
+
+              request.onsuccess = () => {
+                resolve(request.result || []);
+              };
+
+              request.onerror = () => {
+                console.error('IndexedDB getAll error:', request.error);
+                resolve([]);
+              };
+            } catch (error) {
+              console.error('IndexedDB transaction error:', error);
+              resolve([]);
+            }
+          });
+        } catch (error) {
+          console.error('Error getting pending from IndexedDB:', error);
+          return [];
+        }
+      }
+
+      // Remove notification from IndexedDB (Task 5)
+      async function removeFromIndexedDB(id: number): Promise<boolean> {
+        try {
+          const db = await openIndexedDB();
+          if (!db) {
+            return false;
+          }
+
+          return new Promise((resolve) => {
+            try {
+              const transaction = db.transaction(['pending-notifications'], 'readwrite');
+              const store = transaction.objectStore('pending-notifications');
+              const request = store.delete(id);
+
+              request.onsuccess = () => {
+                resolve(true);
+              };
+
+              request.onerror = () => {
+                console.error('IndexedDB delete error:', request.error);
+                resolve(false);
+              };
+            } catch (error) {
+              console.error('IndexedDB delete transaction error:', error);
+              resolve(false);
+            }
+          });
+        } catch (error) {
+          console.error('Error removing from IndexedDB:', error);
+          return false;
+        }
+      }
+
+      // Retry pending notifications from localStorage and IndexedDB
+      async function retryPendingNotifications() {
+        try {
+          let totalPending = 0;
+          let totalSaved = 0;
+
+          // Check localStorage for pending notifications
+          const pendingKey = 'pending_notifications';
+          const localStorageData = localStorage.getItem(pendingKey);
+          let localStoragePending: any[] = [];
+          
+          if (localStorageData) {
+            try {
+              localStoragePending = JSON.parse(localStorageData);
+              totalPending += localStoragePending.length;
+            } catch (error) {
+              console.error('Error parsing localStorage data:', error);
+              localStorage.removeItem(pendingKey);
+            }
+          }
+
+          // Check IndexedDB for pending notifications
+          const indexedDBPending = await getPendingFromIndexedDB();
+          totalPending += indexedDBPending.length;
+
+          // Exit early if no pending notifications
+          if (totalPending === 0) {
+            return;
+          }
+
+          // Attempt to save all pending notifications from localStorage
+          const successfulLocalStorageIndices: number[] = [];
+          
+          for (let i = 0; i < localStoragePending.length; i++) {
+            const notification = localStoragePending[i];
+            
+            try {
+              const success = await saveNotificationToDB({
+                notification_title: notification.notification_title,
+                fcm_message_id: notification.fcm_message_id,
+                timestamp: notification.timestamp
+              }, 0);
+
+              if (success) {
+                successfulLocalStorageIndices.push(i);
+                totalSaved++;
+              }
+            } catch (error) {
+              console.error('Error saving notification from localStorage:', error);
+            }
+          }
+
+          // Remove successfully saved items from localStorage
+          if (successfulLocalStorageIndices.length > 0) {
+            const remaining = localStoragePending.filter((_: any, index: number) => 
+              !successfulLocalStorageIndices.includes(index)
+            );
+            
+            if (remaining.length === 0) {
+              localStorage.removeItem(pendingKey);
+            } else {
+              localStorage.setItem(pendingKey, JSON.stringify(remaining));
+            }
+          }
+
+          // Attempt to save all pending notifications from IndexedDB
+          const successfulIndexedDBIds: number[] = [];
+          
+          for (const notification of indexedDBPending) {
+            try {
+              const success = await saveNotificationToDB({
+                notification_title: notification.notification_title,
+                fcm_message_id: notification.fcm_message_id,
+                timestamp: notification.timestamp
+              }, 0);
+
+              if (success) {
+                successfulIndexedDBIds.push(notification.id);
+                totalSaved++;
+              }
+            } catch (error) {
+              console.error('Error saving notification from IndexedDB:', error);
+            }
+          }
+
+          // Remove successfully saved items from IndexedDB
+          for (const id of successfulIndexedDBIds) {
+            await removeFromIndexedDB(id);
+          }
+
+          // Refresh the notifications list if any were saved
+          if (totalSaved > 0) {
+            await fetchAndUpdateNotifications();
+            showToast(`${totalSaved} відкладених сповіщень збережено`, 'success');
+          }
+
+        } catch (error: any) {
+          console.error('Error in retryPendingNotifications:', error.message);
         }
       }
 
@@ -271,6 +608,83 @@ const unreadCount = allNotifications.filter(n => n.status === 'New').length;
         if (unreadCountElement) {
           const unreadNotifications = document.querySelectorAll('.notification-item[data-status="New"]');
           unreadCountElement.textContent = String(unreadNotifications.length);
+        }
+      }
+
+      // Fetch and update notifications from server
+      async function fetchAndUpdateNotifications() {
+        try {
+          console.log('[UI Update] Fetching notifications from server...');
+          const currentPage = new URLSearchParams(window.location.search).get('page') || '1';
+          const response = await fetch(`/api/notifications/fetch?page=${currentPage}&limit=10`);
+          
+          if (!response.ok) {
+            throw new Error(`Failed to fetch notifications: ${response.status}`);
+          }
+
+          const data = await response.json();
+          console.log('[UI Update] Received data:', data);
+          
+          if (data.success) {
+            // Update notifications list
+            const notificationsList = document.getElementById('notificationsList');
+            if (!notificationsList) {
+              console.error('[UI Update] notificationsList element not found!');
+              return;
+            }
+
+            console.log(`[UI Update] Updating UI with ${data.notifications.length} notifications`);
+
+            // Clear current list
+            notificationsList.innerHTML = '';
+
+            // Add notifications
+            if (data.notifications.length === 0) {
+              notificationsList.innerHTML = `
+                <div class="bg-[#3A4556] rounded-2xl p-4 sm:p-6 text-center">
+                  <p class="text-slate-400 text-sm sm:text-base">Немає сповіщень</p>
+                </div>
+              `;
+            } else {
+              data.notifications.forEach((notification: any) => {
+                console.log('[UI Update] Adding notification to UI:', notification.id);
+                addNotificationToUI({
+                  id: notification.id,
+                  title: notification.notification_title,
+                  timestamp: new Date(notification.created_at),
+                  status: notification.status
+                });
+              });
+            }
+
+            // Update unread count
+            const unreadCountElement = document.getElementById('unreadCount');
+            if (unreadCountElement) {
+              unreadCountElement.textContent = String(data.unreadCount);
+              console.log('[UI Update] Updated unread count:', data.unreadCount);
+            }
+
+            // Update mark all button state
+            const markAllReadButton = document.getElementById('markAllReadButton') as HTMLButtonElement;
+            if (markAllReadButton) {
+              markAllReadButton.disabled = data.unreadCount === 0;
+            }
+            
+            console.log('[UI Update] ✅ UI updated successfully');
+          } else {
+            throw new Error(data.error || 'Unknown error');
+          }
+        } catch (error: any) {
+          console.error('[UI Update] ❌ Error fetching notifications:', error.message);
+          
+          // Determine error type for better user feedback
+          if (error.message?.includes('Failed to fetch') || error.message?.includes('NetworkError')) {
+            showToast('Помилка мережі при оновленні сповіщень', 'error');
+          } else if (error.message?.includes('timeout')) {
+            showToast('Час очікування вичерпано', 'error');
+          } else {
+            showToast('Помилка оновлення сповіщень', 'error');
+          }
         }
       }
 
@@ -362,13 +776,12 @@ const unreadCount = allNotifications.filter(n => n.status === 'New').length;
       });
 
       // Toast notification function
-      function showToast(message: string, type: 'success' | 'error' | 'info' = 'info') {
+      function showToast(message: string, type: 'success' | 'error' | 'info' | 'warning' = 'info') {
         const toast = document.getElementById('toast');
         const toastMessage = document.getElementById('toastMessage');
         const toastIcon = document.getElementById('toastIcon');
         
         if (!toast || !toastMessage || !toastIcon) {
-          console.error('Toast elements not found');
           return;
         }
         
@@ -376,7 +789,8 @@ const unreadCount = allNotifications.filter(n => n.status === 'New').length;
         const config = {
           success: { icon: '✅', bg: 'bg-green-600' },
           error: { icon: '❌', bg: 'bg-red-600' },
-          info: { icon: 'ℹ️', bg: 'bg-blue-600' }
+          info: { icon: 'ℹ️', bg: 'bg-blue-600' },
+          warning: { icon: '⚠️', bg: 'bg-yellow-600' }
         };
         
         const { icon, bg } = config[type];
@@ -388,21 +802,23 @@ const unreadCount = allNotifications.filter(n => n.status === 'New').length;
         // Set message
         toastMessage.textContent = message;
         
-        console.log('Showing toast:', message, type);
-        
         // Show toast
         setTimeout(() => {
           toast.style.opacity = '1';
         }, 10);
         
-        // Hide after 3 seconds
+        // Hide after duration based on type (errors stay longer)
+        const duration = type === 'error' ? 5000 : type === 'warning' ? 4000 : 3000;
         setTimeout(() => {
           toast.style.opacity = '0';
-        }, 3000);
+        }, duration);
       }
 
       // Initialize FCM on page load
       initializeFCM();
+
+      // Check for pending notifications in localStorage and retry (Task 3.3)
+      retryPendingNotifications();
 
       // Update check functionality
       const updateCheckButton = document.getElementById('updateCheckButton');
@@ -472,7 +888,6 @@ const unreadCount = allNotifications.filter(n => n.status === 'New').length;
 
       async function performMarkAllRead(isRetry: boolean = false) {
         try {
-          const originalText = markAllReadButton.textContent;
           markAllReadButton.disabled = true;
           markAllReadButton.textContent = 'Обробка...';
 
@@ -491,18 +906,29 @@ const unreadCount = allNotifications.filter(n => n.status === 'New').length;
           clearTimeout(timeoutId);
 
           if (response.ok) {
-            // Remove all "Нове" badges and warning icons
-            const badges = document.querySelectorAll('.notification-badge');
-            badges.forEach(badge => badge.remove());
-            
-            const warningIcons = document.querySelectorAll('.notification-item svg.text-yellow-500');
-            warningIcons.forEach(icon => icon.parentElement?.remove());
-
-            // Update all notification statuses
+            // Hide all notifications with fade out animation
             const items = document.querySelectorAll('.notification-item');
-            items.forEach(item => {
-              item.setAttribute('data-status', 'Read');
+            items.forEach((item, index) => {
+              const element = item as HTMLElement;
+              element.style.transition = 'opacity 0.3s ease-out, transform 0.3s ease-out';
+              element.style.transitionDelay = `${index * 0.05}s`; // Stagger animation
+              element.style.opacity = '0';
+              element.style.transform = 'translateX(20px)';
             });
+            
+            // Remove all items and show empty state after animation
+            setTimeout(() => {
+              items.forEach(item => item.remove());
+              
+              const notificationsList = document.getElementById('notificationsList');
+              if (notificationsList) {
+                notificationsList.innerHTML = `
+                  <div class="bg-[#3A4556] rounded-2xl p-4 sm:p-6 text-center">
+                    <p class="text-slate-400 text-sm sm:text-base">Немає сповіщень</p>
+                  </div>
+                `;
+              }
+            }, 300 + (items.length * 50));
 
             // Update unread count to 0
             updateUnreadCount();
@@ -564,15 +990,25 @@ const unreadCount = allNotifications.filter(n => n.status === 'New').length;
           clearTimeout(timeoutId);
 
           if (response.ok) {
-            // Remove the "Нове" badge and warning icon
-            const badge = item.querySelector('.notification-badge');
-            badge?.remove();
+            // Hide notification with fade out animation
+            item.style.transition = 'opacity 0.3s ease-out, transform 0.3s ease-out';
+            item.style.opacity = '0';
+            item.style.transform = 'translateX(20px)';
             
-            const warningIcon = item.querySelector('svg.text-yellow-500');
-            warningIcon?.parentElement?.remove();
-
-            // Update status
-            item.setAttribute('data-status', 'Read');
+            // Remove from DOM after animation
+            setTimeout(() => {
+              item.remove();
+              
+              // Check if list is now empty
+              const notificationsList = document.getElementById('notificationsList');
+              if (notificationsList && notificationsList.children.length === 0) {
+                notificationsList.innerHTML = `
+                  <div class="bg-[#3A4556] rounded-2xl p-4 sm:p-6 text-center">
+                    <p class="text-slate-400 text-sm sm:text-base">Немає сповіщень</p>
+                  </div>
+                `;
+              }
+            }, 300);
 
             // Update unread count
             updateUnreadCount();

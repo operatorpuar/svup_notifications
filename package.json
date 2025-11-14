@@ -12,11 +12,15 @@
     "@astrojs/check": "^0.9.5",
     "@astrojs/db": "^0.18.2",
     "@astrojs/netlify": "^6.6.0",
+    "@capacitor/core": "^7.4.4",
     "@tailwindcss/vite": "^4.1.17",
     "astro": "^5.15.5",
     "firebase": "^12.5.0",
     "firebase-admin": "^13.6.0",
     "tailwindcss": "^4.1.17",
     "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.4.4"
   }
 }
