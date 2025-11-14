@@ -121,36 +121,43 @@ messaging.onBackgroundMessage(async (payload) => {
       username: username, // Pass username to API
       timestamp: timestamp
     });
-    console.log('[firebase-messaging-sw.js] Notification saved to database');
+    console.log('[SW] Notification saved to database');
+    
+    // Notify all clients (open tabs) about new notification
+    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    console.log('[SW] Notifying', clients.length, 'clients about new notification');
+    
+    clients.forEach(client => {
+      client.postMessage({
+        type: 'NEW_NOTIFICATION',
+        notification: {
+          title: notificationTitle,
+          body: notificationBody,
+          id: notificationId
+        }
+      });
+    });
   } catch (error) {
-    console.error('[firebase-messaging-sw.js] Failed to save, stored in IndexedDB for retry');
+    console.error('[SW] Failed to save, stored in IndexedDB for retry');
   }
 });
 
-// Handle notification click - open or focus app
+// Handle notification click - always open fresh page
 self.addEventListener('notificationclick', (event) => {
+  console.log('[SW] Notification clicked');
   event.notification.close();
   
-  const urlToOpen = event.notification.data?.url || '/notifications';
+  // Always open fresh page with timestamp to force reload
+  const urlToOpen = '/notifications?refresh=' + Date.now();
   
-  // Check if app is already open, focus it; otherwise open new window
   event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true })
-      .then((clientList) => {
-        // Focus existing window if found
-        for (const client of clientList) {
-          if (client.url.includes('/notifications') && 'focus' in client) {
-            return client.focus();
-          }
-        }
-        
-        // Open new window if not found
-        if (clients.openWindow) {
-          return clients.openWindow(urlToOpen);
-        }
+    clients.openWindow(urlToOpen)
+      .then(windowClient => {
+        console.log('[SW] Opened window:', urlToOpen);
+        return windowClient;
       })
       .catch((error) => {
-        console.error('[SW] Error handling notification click:', error.message);
+        console.error('[SW] Error opening window:', error);
       })
   );
 });

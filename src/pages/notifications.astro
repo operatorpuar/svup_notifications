@@ -820,6 +820,24 @@ const unreadCount = totalCount;
       // Check for pending notifications in localStorage and retry (Task 3.3)
       retryPendingNotifications();
 
+      // Reload page when it becomes visible after being hidden
+      // This ensures background notifications are shown when user returns
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+          // Mark that page was hidden
+          sessionStorage.setItem('pageWasHidden', 'true');
+          console.log('[Visibility] Page hidden');
+        } else {
+          // Check if page was previously hidden
+          const wasHidden = sessionStorage.getItem('pageWasHidden');
+          if (wasHidden === 'true') {
+            console.log('[Visibility] Page became visible after being hidden, reloading...');
+            sessionStorage.removeItem('pageWasHidden');
+            window.location.reload();
+          }
+        }
+      });
+
       // Update check functionality
       const updateCheckButton = document.getElementById('updateCheckButton');
       updateCheckButton?.addEventListener('click', async () => {
