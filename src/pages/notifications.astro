@@ -611,6 +611,27 @@ const unreadCount = totalCount;
         }
       }
 
+      // Update pagination info text (e.g. "1-3 з 5")
+      function updatePaginationInfo() {
+        const paginationInfo = document.getElementById('paginationInfo');
+        if (paginationInfo) {
+          const remainingNotifications = document.querySelectorAll('.notification-item');
+          const totalCount = remainingNotifications.length;
+          
+          if (totalCount === 0) {
+            paginationInfo.style.display = 'none';
+          } else {
+            const currentPage = 1; // We're always on page 1 since we show all remaining
+            const itemsPerPage = 10;
+            const showingFrom = 1;
+            const showingTo = Math.min(itemsPerPage, totalCount);
+            
+            paginationInfo.textContent = `${showingFrom}-${showingTo} з ${totalCount}`;
+            paginationInfo.style.display = 'block';
+          }
+        }
+      }
+
       // Fetch and update notifications from server
       async function fetchAndUpdateNotifications() {
         try {
@@ -1032,6 +1053,11 @@ const unreadCount = totalCount;
             
             // Update unread count immediately
             updateUnreadCount();
+            
+            // Update pagination info after removing item
+            setTimeout(() => {
+              updatePaginationInfo();
+            }, 350); // After animation completes
             
             // Hide notification with fade out animation
             item.style.transition = 'opacity 0.3s ease-out, transform 0.3s ease-out';
