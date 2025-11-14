@@ -24,7 +24,7 @@ if (Astro.request.method === 'POST') {
       result = { success: false, message: '', error: 'Notification title required' };
     } else {
       // Call webhook endpoint
-      const webhookUrl = `${Astro.url.origin}/webhook`;
+      const webhookUrl = `${Astro.url.origin}/api/notifications/webhook`;
       
       console.log('Calling webhook:', webhookUrl);
       
